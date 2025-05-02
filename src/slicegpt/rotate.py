@@ -1,10 +1,12 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
+
 import logging
-import random
+
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
 from tqdm import tqdm
-from typing import List
 
 from .config import config
 from .model_adapter import LayerAdapter, ModelAdapter
@@ -12,22 +14,20 @@ from .model_utils import get_layer0_inputs, get_signals
 from .slicing_scheduler import ConfigSlicingScheduler, ConstSlicingScheduler, SlicingScheduler
 from .utils import cleanup_memory, map_tensors
 
-# Function to compute leverage scores for the matrix
 def compute_leverage_scores(A):
-    # Transfer to GPU if available
+    # Transfering to GPU if available
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     A_torch = torch.tensor(A, dtype=torch.float32, device=device)
 
     # Singular Value Decomposition
-    U, S, Vt = torch.linalg.svd(A_torch, full_matrices=False)
+    _, _, Vt = torch.linalg.svd(A_torch, full_matrices=False)
 
     # Calculating leverage scores for each column
     leverage_scores = torch.sum(Vt**2, dim=0)
 
-    # Transfer back to CPU and convert to numpy
+    # Transfering back to CPU and convert to numpy
     return leverage_scores.cpu().numpy()
 
-# Function to compute fast leverage scores
 def compute_fast_leverage_scores(A, num_samples=1000):
     n, d = A.shape
 
@@ -45,7 +45,6 @@ def compute_fast_leverage_scores(A, num_samples=1000):
     # Computing leverage scores for the sampled matrix
     return compute_leverage_scores(A_sampled)
 
-# Initial column selection based on leverage scores or random
 def initial_column_selection(A, k, method='leverage'):
     n, d = A.shape
 
@@ -65,17 +64,18 @@ def initial_column_selection(A, k, method='leverage'):
 
     return selected_indices
 
-# Compute reconstruction error after slicing columns
-def compute_reconstruction_error(A: torch.Tensor, selected_indices: List[int]):
-    device = A.device
-    A_torch = A.to(device)
+def compute_reconstruction_error(A, selected_indices):
+    # Transfer to GPU if available
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    A_torch = torch.tensor(A, dtype=torch.float32, device=device)
 
     # Select columns for the submatrix S
     S = A_torch[:, selected_indices]
 
     # Compute SVD of S
-    U, S_values, Vt = torch.linalg.svd(S, full_matrices=False)
+    U, _, Vt = torch.linalg.svd(S, full_matrices=False)
 
+    # For large matrices, use batch processing to avoid memory issues
     batch_size = 500  # Larger batch size for GPU
 
     # Initialize projected matrix
@@ -87,63 +87,73 @@ def compute_reconstruction_error(A: torch.Tensor, selected_indices: List[int]):
         A_batch = A_torch[:, i:end]
         A_proj[:, i:end] = U @ (U.T @ A_batch)
 
+    # Calculate error on GPU
     A_norm_squared = torch.sum(A_torch**2).item()
     A_proj_norm_squared = torch.sum(A_proj**2).item()
 
     error = A_norm_squared - A_proj_norm_squared
 
     # Free memory
-    del A_torch, S, U, S_values, Vt, A_proj
+    del A_torch, S, U, Vt, A_proj
     torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     return error
 
-# Local search to improve column selection
-def local_search(A, selected_indices, max_iterations=10, threshold=1e-3):
-    A_torch = A if isinstance(A, torch.Tensor) else torch.tensor(A, dtype=torch.float32, device='cuda' if torch.cuda.is_available() else 'cpu')
-    current_indices = selected_indices.copy()
-    current_norm = torch.norm(A_torch[:, current_indices]) ** 2
+def local_search(A, selected_indices, max_iterations=100, threshold=1e-6):
+    n, d = A.shape
+    k = len(selected_indices)
+    selected_indices = set(selected_indices)
+    remaining_indices = set(range(d)) - selected_indices
 
-    for _ in range(max_iterations):
-        improved = False
-        remaining_indices = list(set(range(A_torch.shape[1])) - set(current_indices))
-        sample_size = int(0.1 * A_torch.shape[1])
-        sample_candidates = random.sample(remaining_indices, min(len(remaining_indices), sample_size))
+    current_error = compute_reconstruction_error(A, list(selected_indices))
+    errors = [current_error]
 
-        for out_idx in current_indices:
-            for in_idx in sample_candidates:
-                trial_indices = current_indices.copy()
-                trial_indices.remove(out_idx)
-                trial_indices.append(in_idx)
+    for iteration in range(max_iterations):
+        best_swap = None
+        best_error = current_error
 
-                trial_norm = torch.norm(A_torch[:, trial_indices]) ** 2
-                if trial_norm > current_norm + threshold:
-                    current_indices = trial_indices
-                    current_norm = trial_norm
-                    improved = True
-                    break
-            if improved:
-                break
+        # Sampling a subset of potential swaps for efficiency
+        sample_size = min(len(remaining_indices), 100)
+        sample_indices = np.random.choice(list(remaining_indices), sample_size, replace=False)
 
-        if not improved:
+        for j in sample_indices:
+            for i in selected_indices:
+                # Swapping column i with column j
+                new_indices = selected_indices - {i} | {j}
+                new_error = compute_reconstruction_error(A, list(new_indices))
+
+                # Swapping columns if there is improvement
+                if new_error < best_error:
+                    best_error = new_error
+                    best_swap = (i, j)
+
+        # If no improvement or improvement below threshold, stop
+        if best_swap is None or (current_error - best_error) / current_error < threshold:
             break
 
-    return current_indices
+        # Performing the best swap
+        i, j = best_swap
+        selected_indices.remove(i)
+        selected_indices.add(j)
+        remaining_indices.add(i)
+        remaining_indices.remove(j)
 
-# Function for column subset selection
-def column_subset_selection(A, k, max_iterations=10, threshold=1e-3):
-    A_torch = A if isinstance(A, torch.Tensor) else torch.tensor(A, dtype=torch.float32, device='cuda' if torch.cuda.is_available() else 'cpu')
+        current_error = best_error
+        errors.append(current_error)
 
-    # Start with a random subset of k columns
-    all_indices = list(range(A_torch.shape[1]))
-    initial_indices = random.sample(all_indices, k)
+        print(f"Iteration {iteration+1}: Error = {current_error:.6f}")
 
-    # Refine using local search
-    selected_indices = local_search(A_torch, initial_indices, max_iterations, threshold)
+    return list(selected_indices)
+
+def column_subset_selection(A, k, max_iterations=100, threshold=1e-6):
+    # Initial column selection based on leverage scores
+    initial_indices = initial_column_selection(A, k, method='leverage')
+
+    # Local search
+    selected_indices = local_search(A, initial_indices, max_iterations, threshold)
 
     return selected_indices
 
-# Slice the attention input for a given layer
 def slice_attention_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     weights = [W.weight.data for W in layer_adapter.get_attention_inputs()]
     concat_weights = torch.cat(weights, dim=1)
@@ -154,7 +164,6 @@ def slice_attention_input(layer_adapter: LayerAdapter, new_embedding_dimension: 
       W.in_features = new_embedding_dimension
     return selected_indices
 
-# Slice the attention output for a given layer
 def slice_attention_output(layer_adapter: LayerAdapter, new_embedding_dimension: int, selected_indices) -> None:
     W = layer_adapter.get_attention_output()
     W.weight.data = W.weight.data[selected_indices, :]
@@ -162,7 +171,6 @@ def slice_attention_output(layer_adapter: LayerAdapter, new_embedding_dimension:
         W.bias.data = W.bias.data[selected_indices]
     W.out_features = new_embedding_dimension
 
-# Slice the MLP input for a given layer
 def slice_mlp_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     weights = [W.weight.data for W in layer_adapter.get_mlp_inputs()]
     concat_weights = torch.cat(weights, dim=1)
@@ -173,7 +181,6 @@ def slice_mlp_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -
       W.in_features = new_embedding_dimension
     return selected_indices
 
-# Slice the MLP output for a given layer
 def slice_mlp_output(layer_adapter: LayerAdapter, new_embedding_dimension: int, selected_indices) -> None:
     W = layer_adapter.get_mlp_output()
     W.weight.data = W.weight.data[selected_indices, :]
@@ -181,21 +188,34 @@ def slice_mlp_output(layer_adapter: LayerAdapter, new_embedding_dimension: int, 
         W.bias.data = W.bias.data[selected_indices]
     W.out_features = new_embedding_dimension
 
-# Slice embeddings for a model
 def slice_embeddings(model_adapter: ModelAdapter, new_embedding_dimensions: dict[int, int]) -> None:
     for i, W in enumerate(model_adapter.get_embeddings()):
-        selected_indices = column_subset_selection(W.weight.data, new_embedding_dimensions[i])
+        selected_indices = column_subset_selection(W.weight.data.cpu().numpy(), new_embedding_dimensions[i])
         W.weight.data = W.weight.data[:, selected_indices]
         W.embedding_dim = new_embedding_dimensions[i]
 
-# Slice the language model head
 def slice_head(model_adapter: ModelAdapter, new_embedding_dimension: int) -> None:
     lm_head = model_adapter.get_lm_head()
     selected_indices = column_subset_selection(lm_head, new_embedding_dimension)
     lm_head.weight.data = lm_head.weight.data[:, selected_indices]
     lm_head.in_features = new_embedding_dimension
 
-# @torch.no_grad()
+def rotate_and_slice(
+    model_adapter: ModelAdapter,
+    dataloader: torch.utils.data.DataLoader[torch.Tensor],
+    slicing_scheduler: SlicingScheduler,
+    apply_mask: bool = True,
+) -> None:
+    """
+    Rotate and slice a model, with interleaved slicing and PCA calculations
+    """
+    if model_adapter.parallel_blocks:
+        rotate_and_slice_parallel(model_adapter, dataloader, slicing_scheduler, apply_mask)
+    else:
+        rotate_and_slice_sequential(model_adapter, dataloader, slicing_scheduler, apply_mask)
+
+
+@torch.no_grad()
 def rotate_and_slice_sequential(
     model_adapter: ModelAdapter,
     dataloader: torch.utils.data.DataLoader[torch.Tensor],
@@ -229,20 +249,33 @@ def rotate_and_slice_sequential(
         layer = layer_adapter.layer
         indices1 = slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
         for i, inp in enumerate(inps):
-            selected = indices1[: slicing_scheduler.get_attention_input_dimension(idx)]
-            args[i] = layer_adapter.get_updated_args(inp[:, :, selected].cpu(), args[i])
+          # directly select the same columns as used in slicing weights
+          selected = indices1[: slicing_scheduler.get_attention_input_dimension(idx)]
+          args[i] = layer_adapter.get_updated_args(
+              inp[:, :, selected].cpu(),
+              args[i],
+          )
 
         slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(idx), indices1)
 
+        # Run GC and cleanup GPU memory
         cleanup_memory()
 
         indices2 = slice_mlp_input(layer_adapter, slicing_scheduler.get_mlp_input_dimension(idx))
         slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx), indices2)
         layer.to('cpu')
-
+        # Run GC and cleanup GPU memory
         cleanup_memory()
 
-# Parallel rotation and slicing function
+    if slicing_scheduler.do_slice_head:
+        slice_head(model_adapter, slicing_scheduler.get_head_dimension())
+
+    # update model's slicing config
+    model_adapter.slicing_conf = slicing_scheduler.slicing_conf.clone()
+    logging.info("Slicing layers done using CSS")
+
+
+@torch.no_grad()
 def rotate_and_slice_parallel(
     model_adapter: ModelAdapter,
     dataloader: torch.utils.data.DataLoader[torch.Tensor],
@@ -250,7 +283,9 @@ def rotate_and_slice_parallel(
     apply_mask: bool = True,
 ) -> None:
     """
-    Perform parallel rotation and slicing of model layers
+    Rotate and slice a model, with interleaved slicing and PCA calculations
+
+    This version works for models where the MLP block and the attention block are computed in parallel.
     """
     model_adapter.model.eval()
     dtype = next(iter(model_adapter.model.parameters())).dtype
@@ -270,39 +305,36 @@ def rotate_and_slice_parallel(
     slice_embeddings(model_adapter, slicing_scheduler.get_embedding_dimensions())
 
     logging.info("Slice layers")
+    layers = model_adapter.get_layers()
     for idx, layer_adapter in enumerate(tqdm(layers, unit="layer", desc="Slicing")):
         layer = layer_adapter.layer
+
         indices1 = slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
+        indices2 = slice_mlp_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
+
         for i, inp in enumerate(inps):
-            selected = indices1[: slicing_scheduler.get_attention_input_dimension(idx)]
-            args[i] = layer_adapter.get_updated_args(inp[:, :, selected].cpu(), args[i])
+          # directly select the same columns as used in slicing weights
+          selected = indices1[: slicing_scheduler.get_attention_input_dimension(idx)]
+          args[i] = layer_adapter.get_updated_args(
+              inp[:, :, selected].cpu(),
+              args[i],
+          )
 
-        slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(idx), indices1)
-
-        cleanup_memory()
-
-        indices2 = slice_mlp_input(layer_adapter, slicing_scheduler.get_mlp_input_dimension(idx))
         slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx), indices2)
+        slice_attention_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx), indices1)
+
         layer.to('cpu')
 
+        # Run GC and cleanup GPU memory
         cleanup_memory()
 
-# Function to rotate and slice a model with interleaved slicing and PCA
-def rotate_and_slice(
-    model_adapter: ModelAdapter,
-    dataloader: torch.utils.data.DataLoader[torch.Tensor],
-    slicing_scheduler: SlicingScheduler,
-    apply_mask: bool = True,
-) -> None:
-    """
-    Rotate and slice a model, with interleaved slicing and PCA calculations
-    """
-    if model_adapter.parallel_blocks:
-        rotate_and_slice_parallel(model_adapter, dataloader, slicing_scheduler, apply_mask)
-    else:
-        rotate_and_slice_sequential(model_adapter, dataloader, slicing_scheduler, apply_mask)
+    if slicing_scheduler.do_slice_head:
+        slice_head(model_adapter, slicing_scheduler.get_head_dimension())
 
-@torch.no_grad()
+    # update model's slicing config
+    model_adapter.slicing_conf = slicing_scheduler.slicing_conf.clone()
+    logging.info("Rotate and slice layers done")
+
 def slice_rotated_model(model_adapter: ModelAdapter, slicing_scheduler: SlicingScheduler | None = None) -> None:
     """
     TODO: Make this gpu memory efficient.
