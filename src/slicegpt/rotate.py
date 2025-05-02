@@ -140,14 +140,11 @@ def slice_mlp_output(layer_adapter: LayerAdapter, new_embedding_dimension: int, 
         W.bias.data = W.bias.data[selected_indices]
     W.out_features = new_embedding_dimension
 
-def slice_embeddings(model_adapter, new_embedding_dimensions):
-    embedding_layers = model_adapter.get_embeddings()
-    for i, W in enumerate(embedding_layers):  # Only unpack the layer (W)
-        tensor = W.weight.data.cpu().float()
-        selected_indices = column_subset_selection(tensor, new_embedding_dimensions[i])
-        mask = torch.zeros(W.weight.shape[1], dtype=torch.bool)
-        mask[selected_indices] = True
-        model_adapter.apply_mask(i, mask)  # Use index 'i' as mask identifier
+def slice_embeddings(model_adapter: ModelAdapter, new_embedding_dimensions: dict[int, int]) -> None:
+    for i, W in enumerate(model_adapter.get_embeddings()):
+        selected_indices = column_subset_selection(W.weight.data.cpu().numpy(), new_embedding_dimensions[i])
+        W.weight.data = W.weight.data[:, selected_indices]
+        W.embedding_dim = new_embedding_dimensions[i]
 
 def slice_head(model_adapter: ModelAdapter, new_embedding_dimension: int) -> None:
     lm_head = model_adapter.get_lm_head()
