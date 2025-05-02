@@ -62,6 +62,7 @@ def local_search(A, selected_indices, max_iterations=20, threshold=1e-4):
     remaining_indices = set(range(d)) - selected_indices
     current_error = compute_reconstruction_error(A, list(selected_indices))
     for iteration in range(max_iterations):
+        print(iteration)
         improved = False
         sample_indices = np.random.choice(list(remaining_indices), min(50, len(remaining_indices)), replace=False)
         for j in sample_indices:
