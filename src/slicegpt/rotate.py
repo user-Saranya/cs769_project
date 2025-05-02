@@ -13,6 +13,7 @@ from .model_adapter import LayerAdapter, ModelAdapter
 from .model_utils import get_layer0_inputs, get_signals
 from .slicing_scheduler import ConfigSlicingScheduler, ConstSlicingScheduler, SlicingScheduler
 from .utils import cleanup_memory, map_tensors
+import torch.nn.functional as F
 
 def compute_leverage_scores(A):
     # Transfering to GPU if available
@@ -20,7 +21,7 @@ def compute_leverage_scores(A):
     A_torch = torch.tensor(A, dtype=torch.float32, device=device)
 
     # Singular Value Decomposition
-    _, _, Vt = torch.linalg.svd(A_torch, full_matrices=False)
+    _, _, Vt = torch.linalg.svd_lowrank(A_torch, q=min(A_torch.shape)-1)
 
     # Calculating leverage scores for each column
     leverage_scores = torch.sum(Vt**2, dim=0)
@@ -65,36 +66,27 @@ def initial_column_selection(A, k, method='leverage'):
     return selected_indices
 
 def compute_reconstruction_error(A, selected_indices):
-    # Transfer to GPU if available
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     A_torch = torch.tensor(A, dtype=torch.float32, device=device)
-
-    # Select columns for the submatrix S
     S = A_torch[:, selected_indices]
+    U, _, _ = torch.linalg.svd(S, full_matrices=False)
 
-    # Compute SVD of S
-    U, _, Vt = torch.linalg.svd(S, full_matrices=False)
+    U_T = U.T
+    batch_size = 500
+    A_proj_norm_squared = 0.0
 
-    # For large matrices, use batch processing to avoid memory issues
-    batch_size = 500  # Larger batch size for GPU
-
-    # Initialize projected matrix
-    A_proj = torch.zeros_like(A_torch)
-
-    # Compute projection batch by batch
     for i in range(0, A_torch.shape[1], batch_size):
         end = min(i + batch_size, A_torch.shape[1])
         A_batch = A_torch[:, i:end]
-        A_proj[:, i:end] = U @ (U.T @ A_batch)
+        tmp = F.linear(A_batch.T, U_T) 
+        proj = F.linear(tmp, U)         
+        A_proj_norm_squared += torch.sum(proj ** 2).item()
 
-    # Calculate error on GPU
-    A_norm_squared = torch.sum(A_torch**2).item()
-    A_proj_norm_squared = torch.sum(A_proj**2).item()
-
+    A_norm_squared = torch.sum(A_torch ** 2).item()
     error = A_norm_squared - A_proj_norm_squared
 
-    # Free memory
-    del A_torch, S, U, Vt, A_proj
+    # Clean up
+    del A_torch, S, U, U_T
     torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     return error
@@ -111,9 +103,10 @@ def local_search(A, selected_indices, max_iterations=100, threshold=1e-6):
     for iteration in range(max_iterations):
         best_swap = None
         best_error = current_error
+        logging.info(iteration)
 
         # Sampling a subset of potential swaps for efficiency
-        sample_size = min(len(remaining_indices), 100)
+        sample_size = min(len(remaining_indices), 50)
         sample_indices = np.random.choice(list(remaining_indices), sample_size, replace=False)
 
         for j in sample_indices:
