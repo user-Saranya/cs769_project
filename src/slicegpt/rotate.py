@@ -38,7 +38,10 @@ def initial_column_selection(A, k, method='leverage'):
             leverage_scores = compute_fast_leverage_scores(A)
         else:
             leverage_scores = compute_leverage_scores(A)
-        selected_indices = np.argpartition(-leverage_scores, k)[:k]
+        if k >= len(leverage_scores):
+            selected_indices = np.argsort(-leverage_scores)[:k]
+        else:
+            selected_indices = np.argpartition(-leverage_scores, k)[:k]
     else:
         selected_indices = np.random.choice(d, k, replace=False)
     return selected_indices
