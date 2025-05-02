@@ -15,15 +15,21 @@ from .slicing_scheduler import ConfigSlicingScheduler, ConstSlicingScheduler, Sl
 from .utils import cleanup_memory, map_tensors
 import torch.nn.functional as F
 
-def compute_leverage_scores(A: np.ndarray) -> np.ndarray:
+def compute_leverage_scores(A):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    A_torch = torch.from_numpy(A).float().to(device)
 
-    # Economy SVD: U, S, Vt
+    if isinstance(A, np.ndarray):
+        A_torch = torch.from_numpy(A).float().to(device)
+    elif isinstance(A, torch.Tensor):
+        A_torch = A.float().to(device)
+    else:
+        raise TypeError("Input A must be a NumPy array or PyTorch tensor")
+
     _, _, Vt = torch.linalg.svd(A_torch, full_matrices=False)
-
     leverage_scores = torch.sum(Vt**2, dim=0)
+
     return leverage_scores.cpu().numpy()
+
 
 def compute_fast_leverage_scores(A: np.ndarray, num_samples=1000) -> np.ndarray:
     n, _ = A.shape
