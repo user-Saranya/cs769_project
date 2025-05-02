@@ -70,7 +70,7 @@ def compute_reconstruction_error(A, selected_indices):
 def local_search(
     A: np.ndarray,
     selected_indices: list[int],
-    max_iterations=30,
+    max_iterations=10,
     threshold=1e-4,
     sample_size=100
 ) -> list[int]:
