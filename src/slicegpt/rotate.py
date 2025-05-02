@@ -70,6 +70,7 @@ def local_search(A, selected_indices, max_iterations=100, threshold=1e-6, sample
     current_error = compute_reconstruction_error(A, A_selected)
 
     for iteration in range(max_iterations):
+        print(iteration)
         if len(remaining_indices) <= sample_size:
             sample_j = remaining_indices
         else:
