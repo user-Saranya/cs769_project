@@ -96,10 +96,11 @@ def slice_attention_input(layer_adapter: LayerAdapter, new_embedding_dimension: 
     for W in layer_adapter.get_attention_inputs():
       W.weight.data = W.weight.data[selected_indices, :]
       W.in_features = new_embedding_dimension
-    return selected_indices
+    # return selected_indices
 
-def slice_attention_output(layer_adapter: LayerAdapter, new_embedding_dimension: int, selected_indices) -> None:
+def slice_attention_output(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     W = layer_adapter.get_attention_output()
+    selected_indices = column_subset_selection(W.weight.data.cpu().numpy(), new_embedding_dimension)
     W.weight.data = W.weight.data[:, selected_indices]
     print("Weight shape:", W.weight.shape)
     if W.bias is not None:
@@ -118,10 +119,11 @@ def slice_mlp_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -
     for W in layer_adapter.get_mlp_inputs():
       W.weight.data = W.weight.data[selected_indices, :]
       W.in_features = new_embedding_dimension
-    return selected_indices
+    # return selected_indices
 
-def slice_mlp_output(layer_adapter: LayerAdapter, new_embedding_dimension: int, selected_indices) -> None:
+def slice_mlp_output(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     W = layer_adapter.get_mlp_output()
+    selected_indices = column_subset_selection(W.weight.data.cpu().numpy(), new_embedding_dimension)
     W.weight.data = W.weight.data[:, selected_indices]
     print("Weight shape:", W.weight.shape)
     if W.bias is not None:
@@ -191,7 +193,7 @@ def rotate_and_slice_sequential(
     logging.info("Slice layers")
     for idx, layer_adapter in enumerate(tqdm(layers, unit="layer", desc="Slicing")):
         layer = layer_adapter.layer
-        indices1 = slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
+        slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
         for i, inp in enumerate(inps):
           # directly select the same columns as used in slicing weights
           selected = indices1[: slicing_scheduler.get_attention_input_dimension(idx)]
@@ -200,13 +202,13 @@ def rotate_and_slice_sequential(
               args[i],
           )
 
-        slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(idx, match_head_dim=False), indices1)
+        slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(idx, match_head_dim=False))
 
         # Run GC and cleanup GPU memory
         cleanup_memory()
 
-        indices2 = slice_mlp_input(layer_adapter, slicing_scheduler.get_mlp_input_dimension(idx))
-        slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx), indices2)
+        slice_mlp_input(layer_adapter, slicing_scheduler.get_mlp_input_dimension(idx))
+        slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx))
         layer.to('cpu')
         # Run GC and cleanup GPU memory
         cleanup_memory()
@@ -253,8 +255,8 @@ def rotate_and_slice_parallel(
     for idx, layer_adapter in enumerate(tqdm(layers, unit="layer", desc="Slicing")):
         layer = layer_adapter.layer
 
-        indices1 = slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
-        indices2 = slice_mlp_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
+        slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
+        slice_mlp_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
 
         for i, inp in enumerate(inps):
           # directly select the same columns as used in slicing weights
@@ -264,8 +266,8 @@ def rotate_and_slice_parallel(
               args[i],
           )
 
-        slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx, match_head_dim=False), indices2)
-        slice_attention_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx), indices1)
+        slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx, match_head_dim=False))
+        slice_attention_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx))
 
         layer.to('cpu')
 
@@ -304,17 +306,17 @@ def slice_rotated_model(model_adapter: ModelAdapter, slicing_scheduler: SlicingS
     for i, layer_adapter in enumerate(layers):
         layer = layer_adapter.layer
         if model_adapter.parallel_blocks:
-            indices1 = slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(i))
-            indices2 = slice_mlp_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(i))   
+            slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(i))
+            slice_mlp_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(i))   
 
-            slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(i), indices2)
-            slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(i, match_head_dim=False), indices1)
+            slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(i))
+            slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(i, match_head_dim=False))
         else:
-            indices1 = slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(i))
-            slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(i, match_head_dim=False), indices1)
+            slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(i))
+            slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(i, match_head_dim=False))
 
-            indices2 = slice_mlp_input(layer_adapter, slicing_scheduler.get_mlp_input_dimension(i))
-            slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(i), indices2)
+            slice_mlp_input(layer_adapter, slicing_scheduler.get_mlp_input_dimension(i))
+            slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(i))
 
     if slicing_scheduler.do_slice_head:
         slice_head(model_adapter, slicing_scheduler.get_head_dimension())
