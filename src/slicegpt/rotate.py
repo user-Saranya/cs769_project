@@ -65,17 +65,24 @@ def initial_column_selection(A, k, method='leverage'):
 
     return selected_indices
     
+import numpy as np
+
 def compute_reconstruction_error_fast(A, A_selected):
+    # Ensure input types are compatible with NumPy linalg
+    A = A.astype(np.float32)
+    A_selected = A_selected.astype(np.float32)
+
     # Project A onto the subspace spanned by A_selected
     pinv = np.linalg.pinv(A_selected)
     A_approx = A_selected @ (pinv @ A)
-    error = np.linalg.norm(A - A_approx, ord='fro')**2
+    error = np.linalg.norm(A - A_approx, ord='fro') ** 2
     return error
 
 def local_search(A, selected_indices, max_iterations=100, threshold=1e-6, sample_size=50):
+    A = A.astype(np.float32)  # Ensure safe dtype
     n, d = A.shape
     k = len(selected_indices)
-    
+
     selected_indices = list(selected_indices)
     selected_mask = np.zeros(d, dtype=bool)
     selected_mask[selected_indices] = True
@@ -88,6 +95,7 @@ def local_search(A, selected_indices, max_iterations=100, threshold=1e-6, sample
     for iteration in range(max_iterations):
         best_swap = None
         best_error = current_error
+        print(iteration)
         print(f"Iteration {iteration}: Current error = {current_error:.6f}")
 
         # Sample candidate columns from remaining set
@@ -97,7 +105,6 @@ def local_search(A, selected_indices, max_iterations=100, threshold=1e-6, sample
             sample_j = np.random.choice(remaining_indices, size=sample_size, replace=False)
 
         for j in sample_j:
-            a_j = A[:, j]
             for i_idx, i in enumerate(selected_indices):
                 temp_indices = selected_indices.copy()
                 temp_indices[i_idx] = j
@@ -115,18 +122,15 @@ def local_search(A, selected_indices, max_iterations=100, threshold=1e-6, sample
         # Apply swap
         i_idx, j = best_swap
         i = selected_indices[i_idx]
+        selected_indices[i_idx] = j
 
         selected_mask[i] = False
         selected_mask[j] = True
-        selected_indices[i_idx] = j
-
         remaining_indices = np.where(~selected_mask)[0]
+
         A_selected = A[:, selected_indices]
         current_error = best_error
         errors.append(current_error)
-
-        print(f" → Swapped out column {i} for column {j}")
-        print(f" → New error: {current_error:.6f}")
 
     return selected_indices
 
