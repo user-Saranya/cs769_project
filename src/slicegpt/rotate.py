@@ -164,7 +164,7 @@ def slice_mlp_output(layer_adapter: LayerAdapter, new_embedding_dimension: int, 
     W.out_features = new_embedding_dimension
 
 def slice_embeddings(model_adapter, new_embedding_dimensions):
-    embedding_layers = model_adapter.get_embedding()
+    embedding_layers = model_adapter.get_embeddings()
     for i, (name, W) in enumerate(embedding_layers.items()):
         tensor = W.weight.data.cpu().float()
         selected_indices = column_subset_selection(tensor, new_embedding_dimensions[i])
