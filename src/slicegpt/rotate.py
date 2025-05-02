@@ -89,18 +89,21 @@ def column_subset_selection(A, k, max_iterations=20, threshold=1e-4):
     return selected_indices
 
 def slice_attention_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
-    weights = [W.weight.data for W in layer_adapter.get_attention_inputs()]
-    concat_weights = torch.cat(weights, dim=1)
-    transposed = concat_weights.T
-    selected_indices = column_subset_selection(transposed, new_embedding_dimension)
     for W in layer_adapter.get_attention_inputs():
-      W.weight.data = W.weight.data[selected_indices, :]
-      W.in_features = new_embedding_dimension
-    return selected_indices
+        selected_indices = column_subset_selection(W.weight.data.cpu().numpy(), new_embedding_dimension)
+        W.weight.data = W.weight.data[selected_indices, :]
+        W.in_features = new_embedding_dimension
+    # weights = [W.weight.data for W in layer_adapter.get_attention_inputs()]
+    # concat_weights = torch.cat(weights, dim=1)
+    # selected_indices = column_subset_selection(concat_weights, new_embedding_dimension)
+    # for W in layer_adapter.get_attention_inputs():
+    #   W.weight.data = W.weight.data[selected_indices, :]
+    #   W.in_features = new_embedding_dimension
+    # return selected_indices
 
 def slice_attention_output(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     W = layer_adapter.get_attention_output()
-    selected_indices = column_subset_selection(W.weight.data.cpu().numpy(), new_embedding_dimension)
+    selected_indices = column_subset_selection(W.weight.data.T.cpu().numpy(), new_embedding_dimension)
     W.weight.data = W.weight.data[:, selected_indices]
     print("Weight shape:", W.weight.shape)
     if W.bias is not None:
@@ -112,18 +115,22 @@ def slice_attention_output(layer_adapter: LayerAdapter, new_embedding_dimension:
     W.out_features = new_embedding_dimension
 
 def slice_mlp_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
-    weights = [W.weight.data for W in layer_adapter.get_mlp_inputs()]
-    concat_weights = torch.cat(weights, dim=1)
-    transposed = concat_weights.T
-    selected_indices = column_subset_selection(transposed, new_embedding_dimension)
     for W in layer_adapter.get_mlp_inputs():
-      W.weight.data = W.weight.data[selected_indices, :]
-      W.in_features = new_embedding_dimension
+        selected_indices = column_subset_selection(W.weight.data.cpu().numpy(), new_embedding_dimension)
+        W.weight.data = W.weight.data[selected_indices, :]
+        W.in_features = new_embedding_dimension
+    # weights = [W.weight.data for W in layer_adapter.get_mlp_inputs()]
+    # concat_weights = torch.cat(weights, dim=1)
+    # transposed = concat_weights.T
+    # selected_indices = column_subset_selection(transposed, new_embedding_dimension)
+    # for W in layer_adapter.get_mlp_inputs():
+    #   W.weight.data = W.weight.data[selected_indices, :]
+    #   W.in_features = new_embedding_dimension
     # return selected_indices
 
 def slice_mlp_output(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     W = layer_adapter.get_mlp_output()
-    selected_indices = column_subset_selection(W.weight.data.cpu().numpy(), new_embedding_dimension)
+    selected_indices = column_subset_selection(W.weight.data.T.cpu().numpy(), new_embedding_dimension)
     print("Weight shape before:", W.weight.shape)
     W.weight.data = W.weight.data[:, selected_indices]
     print("Weight shape:", W.weight.shape)
@@ -143,8 +150,8 @@ def slice_embeddings(model_adapter: ModelAdapter, new_embedding_dimensions: dict
 
 def slice_head(model_adapter: ModelAdapter, new_embedding_dimension: int) -> None:
     lm_head = model_adapter.get_lm_head()
-    selected_indices = column_subset_selection(lm_head.T, new_embedding_dimension)
-    lm_head.weight.data = lm_head.weight.data[selected_indices, :]
+    selected_indices = column_subset_selection(lm_head, new_embedding_dimension)
+    lm_head.weight.data = lm_head.weight.data[:, selected_indices]
     lm_head.in_features = new_embedding_dimension
 
 def rotate_and_slice(
@@ -194,14 +201,14 @@ def rotate_and_slice_sequential(
     logging.info("Slice layers")
     for idx, layer_adapter in enumerate(tqdm(layers, unit="layer", desc="Slicing")):
         layer = layer_adapter.layer
-        indices1 = slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
-        for i, inp in enumerate(inps):
-          # directly select the same columns as used in slicing weights
-          selected = indices1[: slicing_scheduler.get_attention_input_dimension(idx)]
-          args[i] = layer_adapter.get_updated_args(
-              inp[:, :, selected].cpu(),
-              args[i],
-          )
+        slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
+        # for i, inp in enumerate(inps):
+        #   # directly select the same columns as used in slicing weights
+        #   selected = indices1[: slicing_scheduler.get_attention_input_dimension(idx)]
+        #   args[i] = layer_adapter.get_updated_args(
+        #       inp[:, :, selected].cpu(),
+        #       args[i],
+        #   )
 
         slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(idx, match_head_dim=False))
 
@@ -256,16 +263,16 @@ def rotate_and_slice_parallel(
     for idx, layer_adapter in enumerate(tqdm(layers, unit="layer", desc="Slicing")):
         layer = layer_adapter.layer
 
-        indices1 = slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
+        slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
         slice_mlp_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
 
-        for i, inp in enumerate(inps):
-          # directly select the same columns as used in slicing weights
-          selected = indices1[: slicing_scheduler.get_attention_input_dimension(idx)]
-          args[i] = layer_adapter.get_updated_args(
-              inp[:, :, selected].cpu(),
-              args[i],
-          )
+        # for i, inp in enumerate(inps):
+        #   # directly select the same columns as used in slicing weights
+        #   selected = indices1[: slicing_scheduler.get_attention_input_dimension(idx)]
+        #   args[i] = layer_adapter.get_updated_args(
+        #       inp[:, :, selected].cpu(),
+        #       args[i],
+        #   )
 
         slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx, match_head_dim=False))
         slice_attention_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx))
