@@ -99,49 +99,48 @@ def compute_reconstruction_error(A: torch.Tensor, selected_indices: List[int]):
     return error
 
 # Local search to improve column selection
-def local_search(A: torch.Tensor, selected_indices: List[int], max_iterations: int = 10, sample_size: int = 50) -> List[int]:
-    """
-    Fast local search using random projection error estimate.
-    A: [d, n] matrix (PyTorch tensor)
-    selected_indices: initial selected indices (length k)
-    """
-    device = A.device  # Get the device of the input tensor (CPU or GPU)
-    k = len(selected_indices)
-    all_indices = set(range(A.shape[1]))
-    selected_set = set(selected_indices)
-    remaining_indices = list(all_indices - selected_set)
+def local_search(A, selected_indices, max_iterations=10, threshold=1e-3):
+    A_torch = A if isinstance(A, torch.Tensor) else torch.tensor(A, dtype=torch.float32, device='cuda' if torch.cuda.is_available() else 'cpu')
+    current_indices = selected_indices.copy()
+    current_norm = torch.norm(A_torch[:, current_indices]) ** 2
 
-    current_error = compute_reconstruction_error(A, selected_indices)
-    improved = True
-    iterations = 0
-
-    while improved and iterations < max_iterations:
+    for _ in range(max_iterations):
         improved = False
-        iterations += 1
+        remaining_indices = list(set(range(A_torch.shape[1])) - set(current_indices))
+        sample_size = int(0.1 * A_torch.shape[1])
+        sample_candidates = random.sample(remaining_indices, min(len(remaining_indices), sample_size))
 
-        for i in range(k):
-            sample_candidates = random.sample(remaining_indices, min(len(remaining_indices), sample_size))
-            for r in sample_candidates:
-                new_indices = selected_indices.copy()
-                new_indices[i] = r
-                new_error = compute_reconstruction_error(A, new_indices)
-                if new_error < current_error:
-                    selected_indices = new_indices
-                    selected_set = set(selected_indices)
-                    remaining_indices = list(all_indices - selected_set)
-                    current_error = new_error
+        for out_idx in current_indices:
+            for in_idx in sample_candidates:
+                trial_indices = current_indices.copy()
+                trial_indices.remove(out_idx)
+                trial_indices.append(in_idx)
+
+                trial_norm = torch.norm(A_torch[:, trial_indices]) ** 2
+                if trial_norm > current_norm + threshold:
+                    current_indices = trial_indices
+                    current_norm = trial_norm
                     improved = True
-                    break  # restart from i=0
+                    break
             if improved:
                 break
 
-    return selected_indices
+        if not improved:
+            break
+
+    return current_indices
 
 # Function for column subset selection
-def column_subset_selection(A, k, max_iterations=100, threshold=1e-6):
-    A_torch = torch.tensor(A, dtype=torch.float32, device='cuda' if torch.cuda.is_available() else 'cpu')
-    initial_indices = initial_column_selection(A_torch, k, method='leverage')
+def column_subset_selection(A, k, max_iterations=10, threshold=1e-3):
+    A_torch = A if isinstance(A, torch.Tensor) else torch.tensor(A, dtype=torch.float32, device='cuda' if torch.cuda.is_available() else 'cpu')
+
+    # Start with a random subset of k columns
+    all_indices = list(range(A_torch.shape[1]))
+    initial_indices = random.sample(all_indices, k)
+
+    # Refine using local search
     selected_indices = local_search(A_torch, initial_indices, max_iterations, threshold)
+
     return selected_indices
 
 # Slice the attention input for a given layer
