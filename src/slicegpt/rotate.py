@@ -17,95 +17,75 @@ import torch.nn.functional as F
 
 def compute_leverage_scores(A):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    if isinstance(A, np.ndarray):
-        A_torch = torch.from_numpy(A).float().to(device)
-    elif isinstance(A, torch.Tensor):
-        A_torch = A.float().to(device)
-    else:
-        raise TypeError("Input A must be a NumPy array or PyTorch tensor")
-
+    A_torch = torch.tensor(A, dtype=torch.float32, device=device)
     _, _, Vt = torch.linalg.svd(A_torch, full_matrices=False)
     leverage_scores = torch.sum(Vt**2, dim=0)
-
     return leverage_scores.cpu().numpy()
 
-
-def compute_fast_leverage_scores(A: np.ndarray, num_samples=1000) -> np.ndarray:
-    n, _ = A.shape
+def compute_fast_leverage_scores(A, num_samples=1000):
+    n, d = A.shape
     if n > num_samples:
         idx = np.random.choice(n, num_samples, replace=False)
-        scale = np.sqrt(n / num_samples)
-        A_sampled = A[idx] * scale
+        A_sampled = A[idx, :] * np.sqrt(n / num_samples)
     else:
         A_sampled = A
     return compute_leverage_scores(A_sampled)
 
-def initial_column_selection(A: np.ndarray, k: int, method='leverage') -> np.ndarray:
+def initial_column_selection(A, k, method='leverage'):
+    n, d = A.shape
     if method == 'leverage':
-        total_elements = A.numel() if isinstance(A, torch.Tensor) else A.size
-        leverage_scores = (
-            compute_fast_leverage_scores(A) if total_elements > 1e7 else compute_leverage_scores(A)
-        )
-        return np.argpartition(-leverage_scores, k)[:k]
+        if n * d > 10**7:
+            leverage_scores = compute_fast_leverage_scores(A)
+        else:
+            leverage_scores = compute_leverage_scores(A)
+        selected_indices = np.argpartition(-leverage_scores, k)[:k]
     else:
-        return np.random.choice(A.shape[1], k, replace=False)
+        selected_indices = np.random.choice(d, k, replace=False)
+    return selected_indices
 
+@torch.no_grad()
 def compute_reconstruction_error(A, selected_indices):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    if isinstance(A, np.ndarray):
-        A_torch = torch.from_numpy(A).float().to(device)
-    elif isinstance(A, torch.Tensor):
-        A_torch = A.float().to(device)
-    else:
-        raise TypeError("Input A must be a NumPy array or PyTorch tensor")
-
-    A_subset = A_torch[:, selected_indices]
-    pseudo_inverse = torch.linalg.pinv(A_subset)
-    reconstruction = A_subset @ (pseudo_inverse @ A_torch)
-    error = torch.norm(A_torch - reconstruction, p='fro').item()
-
+    A_torch = torch.tensor(A, dtype=torch.float32, device=device)
+    S = A_torch[:, selected_indices]
+    Q, _ = torch.linalg.qr(S, mode='reduced')
+    proj = Q @ (Q.T @ A_torch)
+    error = torch.sum((A_torch - proj) ** 2).item()
+    del A_torch, S, Q, proj
+    torch.cuda.empty_cache() if torch.cuda.is_available() else None
     return error
 
-def local_search(
-    A: np.ndarray,
-    selected_indices: list[int],
-    max_iterations=10,
-    threshold=1e-4,
-    sample_size=100
-) -> list[int]:
-    d = A.shape[1]
-    selected_set = set(selected_indices)
-    remaining = set(range(d)) - selected_set
-    best_error = compute_reconstruction_error(A, list(selected_set))
-    
+def local_search(A, selected_indices, max_iterations=20, threshold=1e-4):
+    n, d = A.shape
+    k = len(selected_indices)
+    selected_indices = set(selected_indices)
+    remaining_indices = set(range(d)) - selected_indices
+    current_error = compute_reconstruction_error(A, list(selected_indices))
     for iteration in range(max_iterations):
-        improvement = False
-        candidates = np.random.choice(list(remaining), min(sample_size, len(remaining)), replace=False)
-        print(iteration)
-        for r in candidates:
-            for s in selected_set:
-                trial = (selected_set - {s}) | {r}
-                trial_error = compute_reconstruction_error(A, list(trial))
-                if trial_error < best_error - threshold * best_error:
-                    selected_set = trial
-                    remaining.add(s)
-                    remaining.remove(r)
-                    best_error = trial_error
-                    improvement = True
+        improved = False
+        sample_indices = np.random.choice(list(remaining_indices), min(50, len(remaining_indices)), replace=False)
+        for j in sample_indices:
+            for i in selected_indices:
+                new_indices = selected_indices - {i} | {j}
+                new_error = compute_reconstruction_error(A, list(new_indices))
+                if new_error < current_error * (1 - threshold):
+                    selected_indices.remove(i)
+                    selected_indices.add(j)
+                    remaining_indices.add(i)
+                    remaining_indices.remove(j)
+                    current_error = new_error
+                    improved = True
                     break
-            if improvement:
+            if improved:
                 break
-
-        if not improvement:
+        if not improved:
             break
+    return list(selected_indices)
 
-    return list(selected_set)
-
-def column_subset_selection(A: np.ndarray, k: int, max_iterations=10, threshold=1e-4) -> list[int]:
+def column_subset_selection(A, k, max_iterations=20, threshold=1e-4):
     initial_indices = initial_column_selection(A, k, method='leverage')
-    return local_search(A, initial_indices, max_iterations=max_iterations, threshold=threshold)
+    selected_indices = local_search(A, initial_indices, max_iterations, threshold)
+    return selected_indices
 
 def slice_attention_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     weights = [W.weight.data for W in layer_adapter.get_attention_inputs()]
