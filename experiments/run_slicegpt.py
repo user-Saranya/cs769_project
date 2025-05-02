@@ -222,7 +222,7 @@ def slicing_main(args: argparse.Namespace) -> None:
     )
 
     scheduler = ConstSlicingScheduler(new_embedding_dimension)
-    rotate.rotate_and_slice(model_adapter, train_loader, scheduler, final_orientation=args.final_orientation)
+    rotate.rotate_and_slice(model_adapter, train_loader, scheduler)
 
     if args.save_dir:
         sliced_model_dir = pathlib.Path(args.save_dir)
