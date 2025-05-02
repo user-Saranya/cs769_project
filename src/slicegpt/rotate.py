@@ -96,7 +96,7 @@ def slice_attention_input(layer_adapter: LayerAdapter, new_embedding_dimension: 
     for W in layer_adapter.get_attention_inputs():
       W.weight.data = W.weight.data[selected_indices, :]
       W.in_features = new_embedding_dimension
-    # return selected_indices
+    return selected_indices
 
 def slice_attention_output(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     W = layer_adapter.get_attention_output()
@@ -193,7 +193,7 @@ def rotate_and_slice_sequential(
     logging.info("Slice layers")
     for idx, layer_adapter in enumerate(tqdm(layers, unit="layer", desc="Slicing")):
         layer = layer_adapter.layer
-        slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
+        indices1 = slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
         for i, inp in enumerate(inps):
           # directly select the same columns as used in slicing weights
           selected = indices1[: slicing_scheduler.get_attention_input_dimension(idx)]
@@ -255,7 +255,7 @@ def rotate_and_slice_parallel(
     for idx, layer_adapter in enumerate(tqdm(layers, unit="layer", desc="Slicing")):
         layer = layer_adapter.layer
 
-        slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
+        indices1 = slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
         slice_mlp_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
 
         for i, inp in enumerate(inps):
