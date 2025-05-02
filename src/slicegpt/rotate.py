@@ -15,119 +15,90 @@ from .slicing_scheduler import ConfigSlicingScheduler, ConstSlicingScheduler, Sl
 from .utils import cleanup_memory, map_tensors
 import torch.nn.functional as F
 
-def compute_leverage_scores(A):
-    # Ensure A is a PyTorch tensor
-    if not isinstance(A, torch.Tensor):
-        A = torch.from_numpy(A)
-    # Ensure dtype is float32 (SVD needs this on CPU)
-    if A.dtype != torch.float32:
-        A = A.float()
-    _, _, Vt = torch.linalg.svd(A, full_matrices=False)
-    leverage_scores = (Vt ** 2).sum(dim=0)
-    return leverage_scores
+def compute_leverage_scores(A: np.ndarray) -> np.ndarray:
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    A_torch = torch.from_numpy(A).float().to(device)
 
-# def compute_fast_leverage_scores(A, num_samples=1000):
-#     n, d = A.shape
+    # Economy SVD: U, S, Vt
+    _, _, Vt = torch.linalg.svd(A_torch, full_matrices=False)
 
-#     # Calculating approximate leverage scores for large matrices
-#     if n > num_samples:
-#         # Random sampling of rows
-#         idx = np.random.choice(n, num_samples, replace=False)
-#         A_sampled = A[idx, :]
+    leverage_scores = torch.sum(Vt**2, dim=0)
+    return leverage_scores.cpu().numpy()
 
-#         # Scaling to maintain expected values
-#         A_sampled = A_sampled * np.sqrt(n / num_samples)
-#     else:
-#         A_sampled = A
-
-#     # Computing leverage scores for the sampled matrix
-#     return compute_leverage_scores(A_sampled)
-
-def initial_column_selection(A, k, method='leverage'):
-    n_cols = A.shape[1]
-    if method == 'leverage':
-        # Sample a small subset of rows for efficient leverage computation
-        sample_size = min(500, A.shape[0])
-        row_indices = np.random.choice(A.shape[0], sample_size, replace=False)
-        if isinstance(A, np.ndarray):
-            A_sampled = A[row_indices, :]
-        else:
-            A_sampled = A[row_indices, :]
-        leverage_scores = compute_leverage_scores(A_sampled)
-        # Get top-k columns by leverage score
-        initial_indices = torch.topk(leverage_scores, k).indices
+def compute_fast_leverage_scores(A: np.ndarray, num_samples=1000) -> np.ndarray:
+    n, _ = A.shape
+    if n > num_samples:
+        idx = np.random.choice(n, num_samples, replace=False)
+        scale = np.sqrt(n / num_samples)
+        A_sampled = A[idx] * scale
     else:
-        # Fallback to random selection
-        initial_indices = torch.randperm(n_cols)[:k]
-    return initial_indices
+        A_sampled = A
+    return compute_leverage_scores(A_sampled)
 
+def initial_column_selection(A: np.ndarray, k: int, method='leverage') -> np.ndarray:
+    if method == 'leverage':
+        leverage_scores = (
+            compute_fast_leverage_scores(A) if A.size > 1e7 else compute_leverage_scores(A)
+        )
+        return np.argpartition(-leverage_scores, k)[:k]
+    else:
+        return np.random.choice(A.shape[1], k, replace=False)
 
-def compute_reconstruction_error(A, candidate_As):
-    pinvs = torch.linalg.pinv(candidate_As)
-    proj = candidate_As @ (pinvs @ A)
-    errors = torch.norm(A - proj, dim=(0, 1)) ** 2
-    return errors
+def compute_reconstruction_error(A: np.ndarray, selected_indices: list[int], batch_size=512) -> float:
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    A_torch = torch.from_numpy(A).float().to(device)
+    S = A_torch[:, selected_indices]
 
-def local_search(A, selected_indices, max_iterations=100, threshold=1e-6, sample_size=50):
-    n, d = A.shape
-    k = len(selected_indices)
-    device = A.device
+    U, _, _ = torch.linalg.svd(S, full_matrices=False)
+    A_proj = torch.zeros_like(A_torch)
 
-    selected_indices = torch.tensor(selected_indices, device=device)
-    selected_mask = torch.zeros(d, dtype=torch.bool, device=device)
-    selected_mask[selected_indices] = True
+    for i in range(0, A.shape[1], batch_size):
+        end = min(i + batch_size, A.shape[1])
+        A_proj[:, i:end] = U @ (U.T @ A_torch[:, i:end])
 
-    remaining_indices = torch.where(~selected_mask)[0]
-    A_selected = A[:, selected_indices]
-    current_error = compute_reconstruction_error(A, A_selected)
+    error = torch.sum(A_torch**2 - A_proj**2).item()
+    del A_torch, S, U, A_proj
+    torch.cuda.empty_cache()
+    return error
 
-    for iteration in range(max_iterations):
-        print(iteration)
-        if len(remaining_indices) <= sample_size:
-            sample_j = remaining_indices
-        else:
-            perm = torch.randperm(len(remaining_indices), device=device)
-            sample_j = remaining_indices[perm[:sample_size]]
+def local_search(
+    A: np.ndarray,
+    selected_indices: list[int],
+    max_iterations=30,
+    threshold=1e-4,
+    sample_size=100
+) -> list[int]:
+    d = A.shape[1]
+    selected_set = set(selected_indices)
+    remaining = set(range(d)) - selected_set
+    best_error = compute_reconstruction_error(A, list(selected_set))
+    
+    for _ in range(max_iterations):
+        improvement = False
+        candidates = np.random.choice(list(remaining), min(sample_size, len(remaining)), replace=False)
 
-        swap_candidates = []
+        for r in candidates:
+            for s in selected_set:
+                trial = (selected_set - {s}) | {r}
+                trial_error = compute_reconstruction_error(A, list(trial))
+                if trial_error < best_error - threshold * best_error:
+                    selected_set = trial
+                    remaining.add(s)
+                    remaining.remove(r)
+                    best_error = trial_error
+                    improvement = True
+                    break
+            if improvement:
+                break
 
-        for i_idx, i in enumerate(selected_indices):
-            temp_selected = selected_indices.repeat(sample_j.size(0), 1)
-            temp_selected[:, i_idx] = sample_j
-            swap_candidates.append(temp_selected)
-
-        all_candidates = torch.cat(swap_candidates, dim=0)
-        candidate_As = A[:, all_candidates.T]
-        candidate_As = candidate_As.reshape(n, k, -1)
-
-        errors = []
-        for idx in range(candidate_As.shape[2]):
-            errors.append(compute_reconstruction_error(A, candidate_As[:, :, idx]))
-
-        errors = torch.tensor(errors, device=device)
-        best_error_idx = torch.argmin(errors)
-
-        best_error = errors[best_error_idx].item()
-        if (current_error - best_error) / current_error < threshold:
+        if not improvement:
             break
 
-        best_i = best_error_idx // sample_j.size(0)
-        best_j = sample_j[best_error_idx % sample_j.size(0)]
+    return list(selected_set)
 
-        old_idx = selected_indices[best_i].item()
-        selected_indices[best_i] = best_j
-
-        selected_mask[old_idx] = False
-        selected_mask[best_j] = True
-        remaining_indices = torch.where(~selected_mask)[0]
-        current_error = best_error
-
-    return selected_indices.cpu().numpy()
-
-
-def column_subset_selection(A, k, method='leverage'):
-    initial_indices = initial_column_selection(A, k, method=method)
-    return initial_indices
+def column_subset_selection(A: np.ndarray, k: int, max_iterations=30, threshold=1e-4) -> list[int]:
+    initial_indices = initial_column_selection(A, k, method='leverage')
+    return local_search(A, initial_indices, max_iterations=max_iterations, threshold=threshold)
 
 def slice_attention_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     weights = [W.weight.data for W in layer_adapter.get_attention_inputs()]
