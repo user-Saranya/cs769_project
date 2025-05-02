@@ -38,7 +38,7 @@ def compute_fast_leverage_scores(A: np.ndarray, num_samples=1000) -> np.ndarray:
 def initial_column_selection(A: np.ndarray, k: int, method='leverage') -> np.ndarray:
     if method == 'leverage':
         leverage_scores = (
-            compute_fast_leverage_scores(A) if A.size > 1e7 else compute_leverage_scores(A)
+            compute_fast_leverage_scores(A) if A.numel() > 1e7 else compute_leverage_scores(A)
         )
         return np.argpartition(-leverage_scores, k)[:k]
     else:
