@@ -64,78 +64,72 @@ def initial_column_selection(A, k, method='leverage'):
         selected_indices = np.random.choice(d, k, replace=False)
 
     return selected_indices
-
-def compute_reconstruction_error(A, selected_indices):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    A_torch = torch.tensor(A, dtype=torch.float32, device=device)
-    S = A_torch[:, selected_indices]
-    U, _, _ = torch.linalg.svd(S, full_matrices=False)
-
-    U_T = U.T
-    batch_size = 500
-    A_proj_norm_squared = 0.0
-
-    for i in range(0, A_torch.shape[1], batch_size):
-        end = min(i + batch_size, A_torch.shape[1])
-        A_batch = A_torch[:, i:end]
-        tmp = F.linear(A_batch.T, U_T) 
-        proj = F.linear(tmp, U)         
-        A_proj_norm_squared += torch.sum(proj ** 2).item()
-
-    A_norm_squared = torch.sum(A_torch ** 2).item()
-    error = A_norm_squared - A_proj_norm_squared
-
-    # Clean up
-    del A_torch, S, U, U_T
-    torch.cuda.empty_cache() if torch.cuda.is_available() else None
-
+    
+def compute_reconstruction_error_fast(A, A_selected):
+    # Project A onto the subspace spanned by A_selected
+    pinv = np.linalg.pinv(A_selected)
+    A_approx = A_selected @ (pinv @ A)
+    error = np.linalg.norm(A - A_approx, ord='fro')**2
     return error
 
-def local_search(A, selected_indices, max_iterations=100, threshold=1e-6):
+def local_search(A, selected_indices, max_iterations=100, threshold=1e-6, sample_size=50):
     n, d = A.shape
     k = len(selected_indices)
-    selected_indices = set(selected_indices)
-    remaining_indices = set(range(d)) - selected_indices
+    
+    selected_indices = list(selected_indices)
+    selected_mask = np.zeros(d, dtype=bool)
+    selected_mask[selected_indices] = True
+    remaining_indices = np.where(~selected_mask)[0]
 
-    current_error = compute_reconstruction_error(A, list(selected_indices))
+    A_selected = A[:, selected_indices]
+    current_error = compute_reconstruction_error_fast(A, A_selected)
     errors = [current_error]
 
     for iteration in range(max_iterations):
         best_swap = None
         best_error = current_error
-        print(iteration)
+        print(f"Iteration {iteration}: Current error = {current_error:.6f}")
 
-        # Sampling a subset of potential swaps for efficiency
-        sample_size = min(len(remaining_indices), 50)
-        sample_indices = np.random.choice(list(remaining_indices), sample_size, replace=False)
+        # Sample candidate columns from remaining set
+        if len(remaining_indices) <= sample_size:
+            sample_j = remaining_indices
+        else:
+            sample_j = np.random.choice(remaining_indices, size=sample_size, replace=False)
 
-        for j in sample_indices:
-            for i in selected_indices:
-                # Swapping column i with column j
-                new_indices = selected_indices - {i} | {j}
-                new_error = compute_reconstruction_error(A, list(new_indices))
-                # Swapping columns if there is improvement
+        for j in sample_j:
+            a_j = A[:, j]
+            for i_idx, i in enumerate(selected_indices):
+                temp_indices = selected_indices.copy()
+                temp_indices[i_idx] = j
+                A_temp = A[:, temp_indices]
+                new_error = compute_reconstruction_error_fast(A, A_temp)
+
                 if new_error < best_error:
                     best_error = new_error
-                    best_swap = (i, j)
+                    best_swap = (i_idx, j)
 
-        # If no improvement or improvement below threshold, stop
+        # Stopping condition
         if best_swap is None or (current_error - best_error) / current_error < threshold:
             break
 
-        # Performing the best swap
-        i, j = best_swap
-        selected_indices.remove(i)
-        selected_indices.add(j)
-        remaining_indices.add(i)
-        remaining_indices.remove(j)
+        # Apply swap
+        i_idx, j = best_swap
+        i = selected_indices[i_idx]
 
+        selected_mask[i] = False
+        selected_mask[j] = True
+        selected_indices[i_idx] = j
+
+        remaining_indices = np.where(~selected_mask)[0]
+        A_selected = A[:, selected_indices]
         current_error = best_error
         errors.append(current_error)
 
-        print(f"Iteration {iteration+1}: Error = {current_error:.6f}")
+        print(f" → Swapped out column {i} for column {j}")
+        print(f" → New error: {current_error:.6f}")
 
-    return list(selected_indices)
+    return selected_indices
+
 
 def column_subset_selection(A, k, max_iterations=100, threshold=1e-6):
     # Initial column selection based on leverage scores
