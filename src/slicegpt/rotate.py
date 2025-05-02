@@ -103,7 +103,7 @@ def local_search(A, selected_indices, max_iterations=100, threshold=1e-6):
     for iteration in range(max_iterations):
         best_swap = None
         best_error = current_error
-        logging.info(iteration)
+        print(iteration)
 
         # Sampling a subset of potential swaps for efficiency
         sample_size = min(len(remaining_indices), 50)
