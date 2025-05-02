@@ -196,6 +196,53 @@ def slice_head(model_adapter: ModelAdapter, new_embedding_dimension: int) -> Non
     lm_head.weight.data = lm_head.weight.data[:, selected_indices]
     lm_head.in_features = new_embedding_dimension
 
+# @torch.no_grad()
+def rotate_and_slice_sequential(
+    model_adapter: ModelAdapter,
+    dataloader: torch.utils.data.DataLoader[torch.Tensor],
+    slicing_scheduler: SlicingScheduler,
+    apply_mask: bool = True,
+) -> None:
+    """
+    Rotate and slice the provided model, with interleaved slicing and PCA calculations.
+
+    This method works for models where the MLP block is computed after the attention block.
+    """
+    model_adapter.model.eval()
+    dtype = next(iter(model_adapter.model.parameters())).dtype
+
+    inps, args, kwargs, ignore_masks = [], [], [], []
+    for batch in dataloader:
+        inp_batch, args_batch, kwargs_batch = get_layer0_inputs(model_adapter, batch)
+        inps.append(inp_batch)
+        args.append(args_batch)
+        kwargs.append(kwargs_batch)
+        if apply_mask:
+            ignore_masks.append(batch["attention_mask"])
+
+    layers = model_adapter.get_layers()
+    slicing_scheduler.setup(hidden_size=model_adapter.hidden_size, layers_num=len(layers), parallel_blocks=False)
+
+    slice_embeddings(model_adapter, slicing_scheduler.get_embedding_dimensions())
+
+    logging.info("Slice layers")
+    for idx, layer_adapter in enumerate(tqdm(layers, unit="layer", desc="Slicing")):
+        layer = layer_adapter.layer
+        indices1 = slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
+        for i, inp in enumerate(inps):
+            selected = indices1[: slicing_scheduler.get_attention_input_dimension(idx)]
+            args[i] = layer_adapter.get_updated_args(inp[:, :, selected].cpu(), args[i])
+
+        slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(idx), indices1)
+
+        cleanup_memory()
+
+        indices2 = slice_mlp_input(layer_adapter, slicing_scheduler.get_mlp_input_dimension(idx))
+        slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx), indices2)
+        layer.to('cpu')
+
+        cleanup_memory()
+
 # Parallel rotation and slicing function
 def rotate_and_slice_parallel(
     model_adapter: ModelAdapter,
