@@ -102,7 +102,7 @@ def slice_attention_output(layer_adapter: LayerAdapter, new_embedding_dimension:
     W = layer_adapter.get_attention_output()
     W.weight.data = W.weight.data[:, selected_indices]
     if W.bias is not None:
-        W.bias.data = W.bias.data[selected_indices]
+        W.bias.data = W.bias.data[:, selected_indices]
     W.out_features = new_embedding_dimension
 
 def slice_mlp_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
@@ -119,7 +119,7 @@ def slice_mlp_output(layer_adapter: LayerAdapter, new_embedding_dimension: int, 
     W = layer_adapter.get_mlp_output()
     W.weight.data = W.weight.data[:, selected_indices]
     if W.bias is not None:
-        W.bias.data = W.bias.data[selected_indices]
+        W.bias.data = W.bias.data[:, selected_indices]
     W.out_features = new_embedding_dimension
 
 def slice_embeddings(model_adapter: ModelAdapter, new_embedding_dimensions: dict[int, int]) -> None:
