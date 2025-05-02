@@ -79,10 +79,10 @@ def local_search(
     remaining = set(range(d)) - selected_set
     best_error = compute_reconstruction_error(A, list(selected_set))
     
-    for _ in range(max_iterations):
+    for iteration in range(max_iterations):
         improvement = False
         candidates = np.random.choice(list(remaining), min(sample_size, len(remaining)), replace=False)
-
+        print(iteration)
         for r in candidates:
             for s in selected_set:
                 trial = (selected_set - {s}) | {r}
