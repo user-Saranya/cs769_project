@@ -50,21 +50,21 @@ def initial_column_selection(A: np.ndarray, k: int, method='leverage') -> np.nda
     else:
         return np.random.choice(A.shape[1], k, replace=False)
 
-def compute_reconstruction_error(A: np.ndarray, selected_indices: list[int], batch_size=512) -> float:
+def compute_reconstruction_error(A, selected_indices):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    A_torch = torch.from_numpy(A).float().to(device)
-    S = A_torch[:, selected_indices]
 
-    U, _, _ = torch.linalg.svd(S, full_matrices=False)
-    A_proj = torch.zeros_like(A_torch)
+    if isinstance(A, np.ndarray):
+        A_torch = torch.from_numpy(A).float().to(device)
+    elif isinstance(A, torch.Tensor):
+        A_torch = A.float().to(device)
+    else:
+        raise TypeError("Input A must be a NumPy array or PyTorch tensor")
 
-    for i in range(0, A.shape[1], batch_size):
-        end = min(i + batch_size, A.shape[1])
-        A_proj[:, i:end] = U @ (U.T @ A_torch[:, i:end])
+    A_subset = A_torch[:, selected_indices]
+    pseudo_inverse = torch.linalg.pinv(A_subset)
+    reconstruction = A_subset @ (pseudo_inverse @ A_torch)
+    error = torch.norm(A_torch - reconstruction, p='fro').item()
 
-    error = torch.sum(A_torch**2 - A_proj**2).item()
-    del A_torch, S, U, A_proj
-    torch.cuda.empty_cache()
     return error
 
 def local_search(
