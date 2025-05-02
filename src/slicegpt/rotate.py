@@ -124,10 +124,11 @@ def slice_mlp_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -
 def slice_mlp_output(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     W = layer_adapter.get_mlp_output()
     selected_indices = column_subset_selection(W.weight.data.cpu().numpy(), new_embedding_dimension)
+    print("Weight shape before:", W.weight.shape)
     W.weight.data = W.weight.data[:, selected_indices]
     print("Weight shape:", W.weight.shape)
     if W.bias is not None:
-        print("Bias shape:", W.bias.shape)
+        print("Bias shape before:", W.bias.shape)
     else:
         print("No bias present.")
     if W.bias is not None:
