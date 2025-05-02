@@ -99,51 +99,44 @@ def compute_reconstruction_error(A, selected_indices):
 
     return error
 
-def local_search(A, selected_indices, max_iterations=100, threshold=1e-6):
-    n, d = A.shape
+def local_search(A: torch.Tensor, selected_indices: List[int], max_iterations: int = 10, sample_size: int = 50) -> List[int]:
+    """
+    Fast local search using random projection error estimate.
+    A: [d, n] matrix
+    selected_indices: initial selected indices (length k)
+    """
+    device = A.device
     k = len(selected_indices)
-    selected_indices = set(selected_indices)
-    remaining_indices = set(range(d)) - selected_indices
+    all_indices = set(range(A.shape[1]))
+    selected_set = set(selected_indices)
+    remaining_indices = list(all_indices - selected_set)
 
-    current_error = compute_reconstruction_error(A, list(selected_indices))
-    errors = [current_error]
+    current_error = compute_reconstruction_error_fast(A, selected_indices)
+    improved = True
+    iterations = 0
 
-    for iteration in range(max_iterations):
-        best_swap = None
-        best_error = current_error
+    while improved and iterations < max_iterations:
+        improved = False
+        iterations += 1
 
-        # Sampling a subset of potential swaps for efficiency
-        sample_size = min(len(remaining_indices), 100)
-        sample_indices = np.random.choice(list(remaining_indices), sample_size, replace=False)
+        for i in range(k):
+            sample_candidates = random.sample(remaining_indices, min(len(remaining_indices), sample_size))
+            for r in sample_candidates:
+                new_indices = selected_indices.copy()
+                new_indices[i] = r
+                new_error = compute_reconstruction_error(A, new_indices)
+                if new_error < current_error:
+                    selected_indices = new_indices
+                    selected_set = set(selected_indices)
+                    remaining_indices = list(all_indices - selected_set)
+                    current_error = new_error
+                    improved = True
+                    break  # restart from i=0
+            if improved:
+                break
 
-        for j in sample_indices:
-            for i in selected_indices:
-                # Swapping column i with column j
-                new_indices = selected_indices - {i} | {j}
-                new_error = compute_reconstruction_error(A, list(new_indices))
+    return selected_indices
 
-                # Swapping columns if there is improvement
-                if new_error < best_error:
-                    best_error = new_error
-                    best_swap = (i, j)
-
-        # If no improvement or improvement below threshold, stop
-        if best_swap is None or (current_error - best_error) / current_error < threshold:
-            break
-
-        # Performing the best swap
-        i, j = best_swap
-        selected_indices.remove(i)
-        selected_indices.add(j)
-        remaining_indices.add(i)
-        remaining_indices.remove(j)
-
-        current_error = best_error
-        errors.append(current_error)
-
-        print(f"Iteration {iteration+1}: Error = {current_error:.6f}")
-
-    return list(selected_indices)
 
 def column_subset_selection(A, k, max_iterations=100, threshold=1e-6):
     # Initial column selection based on leverage scores
