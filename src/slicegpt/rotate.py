@@ -21,7 +21,7 @@ def compute_leverage_scores(A):
     A_torch = torch.tensor(A, dtype=torch.float32, device=device)
 
     # Singular Value Decomposition
-    _, _, Vt = torch.linalg.svd_lowrank(A_torch, q=min(A_torch.shape)-1)
+    _, _, Vt = torch.linalg.svd(A_torch, full_matrices=False)
 
     # Calculating leverage scores for each column
     leverage_scores = torch.sum(Vt**2, dim=0)
