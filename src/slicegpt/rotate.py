@@ -39,16 +39,25 @@ def compute_leverage_scores(A):
 
 def initial_column_selection(A, k, method='leverage', num_samples=1000):
     n, d = A.shape
+
+    if isinstance(A, np.ndarray):
+        A_torch = torch.from_numpy(A)
+    else:
+        A_torch = A
+
+    device = A_torch.device if torch.is_tensor(A_torch) else torch.device('cpu')
+
     if method == 'leverage':
         if n > num_samples:
-            idx = torch.randperm(n, device=A.device)[:num_samples]
-            A_sampled = A[idx, :] * (n / num_samples) ** 0.5
+            idx = torch.randperm(n, device=device)[:num_samples]
+            A_sampled = A_torch[idx, :] * (n / num_samples) ** 0.5
         else:
-            A_sampled = A
+            A_sampled = A_torch
         leverage_scores = compute_leverage_scores(A_sampled)
         return torch.topk(leverage_scores, k).indices.cpu().numpy()
     else:
         return torch.randperm(d)[:k].cpu().numpy()
+
 
 def compute_reconstruction_error(A, candidate_As):
     pinvs = torch.linalg.pinv(candidate_As)
