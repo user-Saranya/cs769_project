@@ -7,6 +7,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from tqdm import tqdm
+from typing import List
+
 
 from .config import config
 from .model_adapter import LayerAdapter, ModelAdapter
