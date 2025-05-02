@@ -51,7 +51,7 @@ def initial_column_selection(A, k, method='leverage', num_samples=1000):
         return torch.randperm(d)[:k].cpu().numpy()
 
 def compute_reconstruction_error(A, candidate_As):
-   pinvs = torch.linalg.pinv(candidate_As)
+    pinvs = torch.linalg.pinv(candidate_As)
     proj = candidate_As @ (pinvs @ A)
     errors = torch.norm(A - proj, dim=(0, 1)) ** 2
     return errors
