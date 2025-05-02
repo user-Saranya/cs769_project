@@ -121,7 +121,6 @@ def local_search(A, selected_indices, max_iterations=100, threshold=1e-6):
                 # Swapping column i with column j
                 new_indices = selected_indices - {i} | {j}
                 new_error = compute_reconstruction_error(A, list(new_indices))
-
                 # Swapping columns if there is improvement
                 if new_error < best_error:
                     best_error = new_error
