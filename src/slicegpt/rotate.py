@@ -16,6 +16,12 @@ from .utils import cleanup_memory, map_tensors
 import torch.nn.functional as F
 
 def compute_leverage_scores(A):
+    # Ensure A is a PyTorch tensor
+    if not isinstance(A, torch.Tensor):
+        A = torch.from_numpy(A)
+    # Ensure dtype is float32 (SVD needs this on CPU)
+    if A.dtype != torch.float32:
+        A = A.float()
     _, _, Vt = torch.linalg.svd(A, full_matrices=False)
     leverage_scores = (Vt ** 2).sum(dim=0)
     return leverage_scores
@@ -37,26 +43,23 @@ def compute_leverage_scores(A):
 #     # Computing leverage scores for the sampled matrix
 #     return compute_leverage_scores(A_sampled)
 
-def initial_column_selection(A, k, method='leverage', num_samples=1000):
-    n, d = A.shape
-
-    if isinstance(A, np.ndarray):
-        A_torch = torch.from_numpy(A)
-    else:
-        A_torch = A
-
-    device = A_torch.device if torch.is_tensor(A_torch) else torch.device('cpu')
-
+def initial_column_selection(A, k, method='leverage'):
+    n_cols = A.shape[1]
     if method == 'leverage':
-        if n > num_samples:
-            idx = torch.randperm(n, device=device)[:num_samples]
-            A_sampled = A_torch[idx, :] * (n / num_samples) ** 0.5
+        # Sample a small subset of rows for efficient leverage computation
+        sample_size = min(500, A.shape[0])
+        row_indices = np.random.choice(A.shape[0], sample_size, replace=False)
+        if isinstance(A, np.ndarray):
+            A_sampled = A[row_indices, :]
         else:
-            A_sampled = A_torch
+            A_sampled = A[row_indices, :]
         leverage_scores = compute_leverage_scores(A_sampled)
-        return torch.topk(leverage_scores, k).indices.cpu().numpy()
+        # Get top-k columns by leverage score
+        initial_indices = torch.topk(leverage_scores, k).indices
     else:
-        return torch.randperm(d)[:k].cpu().numpy()
+        # Fallback to random selection
+        initial_indices = torch.randperm(n_cols)[:k]
+    return initial_indices
 
 
 def compute_reconstruction_error(A, candidate_As):
@@ -122,10 +125,9 @@ def local_search(A, selected_indices, max_iterations=100, threshold=1e-6, sample
     return selected_indices.cpu().numpy()
 
 
-def column_subset_selection(A, k, max_iterations=100, threshold=1e-6):
-    # Initial column selection based on leverage scores
-    initial_indices = initial_column_selection(A, k, method='leverage')
-    return local_search(A, initial_indices, max_iterations, threshold)
+def column_subset_selection(A, k, method='leverage'):
+    initial_indices = initial_column_selection(A, k, method=method)
+    return initial_indices
 
 def slice_attention_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     weights = [W.weight.data for W in layer_adapter.get_attention_inputs()]
@@ -161,11 +163,15 @@ def slice_mlp_output(layer_adapter: LayerAdapter, new_embedding_dimension: int, 
         W.bias.data = W.bias.data[selected_indices]
     W.out_features = new_embedding_dimension
 
-def slice_embeddings(model_adapter: ModelAdapter, new_embedding_dimensions: dict[int, int]) -> None:
-    for i, W in enumerate(model_adapter.get_embeddings()):
-        selected_indices = column_subset_selection(W.weight.data.cpu().numpy(), new_embedding_dimensions[i])
-        W.weight.data = W.weight.data[:, selected_indices]
-        W.embedding_dim = new_embedding_dimensions[i]
+def slice_embeddings(model_adapter, new_embedding_dimensions):
+    embedding_layers = model_adapter.get_embedding_layers()
+    for i, (name, W) in enumerate(embedding_layers.items()):
+        tensor = W.weight.data.cpu().float()
+        selected_indices = column_subset_selection(tensor, new_embedding_dimensions[i])
+        # Apply the mask (same as before)
+        mask = torch.zeros(W.weight.shape[1], dtype=torch.bool)
+        mask[selected_indices] = True
+        model_adapter.apply_mask(name, mask)
 
 def slice_head(model_adapter: ModelAdapter, new_embedding_dimension: int) -> None:
     lm_head = model_adapter.get_lm_head()
