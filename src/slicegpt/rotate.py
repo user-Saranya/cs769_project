@@ -94,7 +94,7 @@ def column_subset_selection(A, k, max_iterations=20, threshold=1e-4):
 def slice_attention_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     for W in layer_adapter.get_attention_inputs():
         selected_indices = column_subset_selection(W.weight.data.cpu().numpy(), new_embedding_dimension)
-        W.weight.data = W.weight.data[selected_indices, :]
+        W.weight.data = W.weight.data[:, selected_indices]
         W.in_features = new_embedding_dimension
     # weights = [W.weight.data for W in layer_adapter.get_attention_inputs()]
     # concat_weights = torch.cat(weights, dim=1)
@@ -107,7 +107,7 @@ def slice_attention_input(layer_adapter: LayerAdapter, new_embedding_dimension: 
 def slice_attention_output(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     W = layer_adapter.get_attention_output()
     selected_indices = column_subset_selection(W.weight.data.T.cpu().numpy(), new_embedding_dimension)
-    W.weight.data = W.weight.data[:, selected_indices]
+    W.weight.data = W.weight.data[selected_indices, :]
     print("Weight shape:", W.weight.shape)
     if W.bias is not None:
         print("Bias shape:", W.bias.shape)
@@ -120,7 +120,7 @@ def slice_attention_output(layer_adapter: LayerAdapter, new_embedding_dimension:
 def slice_mlp_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     for W in layer_adapter.get_mlp_inputs():
         selected_indices = column_subset_selection(W.weight.data.cpu().numpy(), new_embedding_dimension)
-        W.weight.data = W.weight.data[selected_indices, :]
+        W.weight.data = W.weight.data[:, selected_indices]
         W.in_features = new_embedding_dimension
     # weights = [W.weight.data for W in layer_adapter.get_mlp_inputs()]
     # concat_weights = torch.cat(weights, dim=1)
@@ -135,7 +135,7 @@ def slice_mlp_output(layer_adapter: LayerAdapter, new_embedding_dimension: int) 
     W = layer_adapter.get_mlp_output()
     selected_indices = column_subset_selection(W.weight.data.T.cpu().numpy(), new_embedding_dimension)
     print("Weight shape before:", W.weight.shape)
-    W.weight.data = W.weight.data[:, selected_indices]
+    W.weight.data = W.weight.data[selected_indices, :]
     print("Weight shape:", W.weight.shape)
     if W.bias is not None:
         print("Bias shape before:", W.bias.shape)
