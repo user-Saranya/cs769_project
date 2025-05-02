@@ -16,133 +16,106 @@ from .utils import cleanup_memory, map_tensors
 import torch.nn.functional as F
 
 def compute_leverage_scores(A):
-    # Transfering to GPU if available
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    A_torch = torch.tensor(A, dtype=torch.float32, device=device)
+    _, _, Vt = torch.linalg.svd(A, full_matrices=False)
+    leverage_scores = (Vt ** 2).sum(dim=0)
+    return leverage_scores
 
-    # Singular Value Decomposition
-    _, _, Vt = torch.linalg.svd(A_torch, full_matrices=False)
+# def compute_fast_leverage_scores(A, num_samples=1000):
+#     n, d = A.shape
 
-    # Calculating leverage scores for each column
-    leverage_scores = torch.sum(Vt**2, dim=0)
+#     # Calculating approximate leverage scores for large matrices
+#     if n > num_samples:
+#         # Random sampling of rows
+#         idx = np.random.choice(n, num_samples, replace=False)
+#         A_sampled = A[idx, :]
 
-    # Transfering back to CPU and convert to numpy
-    return leverage_scores.cpu().numpy()
+#         # Scaling to maintain expected values
+#         A_sampled = A_sampled * np.sqrt(n / num_samples)
+#     else:
+#         A_sampled = A
 
-def compute_fast_leverage_scores(A, num_samples=1000):
+#     # Computing leverage scores for the sampled matrix
+#     return compute_leverage_scores(A_sampled)
+
+def initial_column_selection(A, k, method='leverage', num_samples=1000):
     n, d = A.shape
-
-    # Calculating approximate leverage scores for large matrices
-    if n > num_samples:
-        # Random sampling of rows
-        idx = np.random.choice(n, num_samples, replace=False)
-        A_sampled = A[idx, :]
-
-        # Scaling to maintain expected values
-        A_sampled = A_sampled * np.sqrt(n / num_samples)
-    else:
-        A_sampled = A
-
-    # Computing leverage scores for the sampled matrix
-    return compute_leverage_scores(A_sampled)
-
-def initial_column_selection(A, k, method='leverage'):
-    n, d = A.shape
-
     if method == 'leverage':
-        # For large matrices computing approximate leverage scores
-        if n * d > 10**7:
-            leverage_scores = compute_fast_leverage_scores(A)
+        if n > num_samples:
+            idx = torch.randperm(n, device=A.device)[:num_samples]
+            A_sampled = A[idx, :] * (n / num_samples) ** 0.5
         else:
-            leverage_scores = compute_leverage_scores(A)
-
-        # Selecting columns with highest leverage scores
-        selected_indices = np.argsort(-leverage_scores)[:k]
-
-    # Random selection
+            A_sampled = A
+        leverage_scores = compute_leverage_scores(A_sampled)
+        return torch.topk(leverage_scores, k).indices.cpu().numpy()
     else:
-        selected_indices = np.random.choice(d, k, replace=False)
+        return torch.randperm(d)[:k].cpu().numpy()
 
-    return selected_indices
-    
-import numpy as np
-
-def compute_reconstruction_error_fast(A, A_selected):
-    # Ensure input types are compatible with NumPy linalg
-    A = A.astype(np.float32)
-    A_selected = A_selected.astype(np.float32)
-
-    # Project A onto the subspace spanned by A_selected
-    pinv = np.linalg.pinv(A_selected)
-    A_approx = A_selected @ (pinv @ A)
-    error = np.linalg.norm(A - A_approx, ord='fro') ** 2
-    return error
+def compute_reconstruction_error(A, candidate_As):
+   pinvs = torch.linalg.pinv(candidate_As)
+    proj = candidate_As @ (pinvs @ A)
+    errors = torch.norm(A - proj, dim=(0, 1)) ** 2
+    return errors
 
 def local_search(A, selected_indices, max_iterations=100, threshold=1e-6, sample_size=50):
-    A = A.astype(np.float32)  # Ensure safe dtype
     n, d = A.shape
     k = len(selected_indices)
+    device = A.device
 
-    selected_indices = list(selected_indices)
-    selected_mask = np.zeros(d, dtype=bool)
+    selected_indices = torch.tensor(selected_indices, device=device)
+    selected_mask = torch.zeros(d, dtype=torch.bool, device=device)
     selected_mask[selected_indices] = True
-    remaining_indices = np.where(~selected_mask)[0]
 
+    remaining_indices = torch.where(~selected_mask)[0]
     A_selected = A[:, selected_indices]
-    current_error = compute_reconstruction_error_fast(A, A_selected)
-    errors = [current_error]
+    current_error = compute_reconstruction_error(A, A_selected)
 
     for iteration in range(max_iterations):
-        best_swap = None
-        best_error = current_error
-        print(iteration)
-        print(f"Iteration {iteration}: Current error = {current_error:.6f}")
-
-        # Sample candidate columns from remaining set
         if len(remaining_indices) <= sample_size:
             sample_j = remaining_indices
         else:
-            sample_j = np.random.choice(remaining_indices, size=sample_size, replace=False)
+            perm = torch.randperm(len(remaining_indices), device=device)
+            sample_j = remaining_indices[perm[:sample_size]]
 
-        for j in sample_j:
-            for i_idx, i in enumerate(selected_indices):
-                temp_indices = selected_indices.copy()
-                temp_indices[i_idx] = j
-                A_temp = A[:, temp_indices]
-                new_error = compute_reconstruction_error_fast(A, A_temp)
+        swap_candidates = []
 
-                if new_error < best_error:
-                    best_error = new_error
-                    best_swap = (i_idx, j)
+        for i_idx, i in enumerate(selected_indices):
+            temp_selected = selected_indices.repeat(sample_j.size(0), 1)
+            temp_selected[:, i_idx] = sample_j
+            swap_candidates.append(temp_selected)
 
-        # Stopping condition
-        if best_swap is None or (current_error - best_error) / current_error < threshold:
+        all_candidates = torch.cat(swap_candidates, dim=0)
+        candidate_As = A[:, all_candidates.T]
+        candidate_As = candidate_As.reshape(n, k, -1)
+
+        errors = []
+        for idx in range(candidate_As.shape[2]):
+            errors.append(compute_reconstruction_error(A, candidate_As[:, :, idx]))
+
+        errors = torch.tensor(errors, device=device)
+        best_error_idx = torch.argmin(errors)
+
+        best_error = errors[best_error_idx].item()
+        if (current_error - best_error) / current_error < threshold:
             break
 
-        # Apply swap
-        i_idx, j = best_swap
-        i = selected_indices[i_idx]
-        selected_indices[i_idx] = j
+        best_i = best_error_idx // sample_j.size(0)
+        best_j = sample_j[best_error_idx % sample_j.size(0)]
 
-        selected_mask[i] = False
-        selected_mask[j] = True
-        remaining_indices = np.where(~selected_mask)[0]
+        old_idx = selected_indices[best_i].item()
+        selected_indices[best_i] = best_j
 
-        A_selected = A[:, selected_indices]
+        selected_mask[old_idx] = False
+        selected_mask[best_j] = True
+        remaining_indices = torch.where(~selected_mask)[0]
         current_error = best_error
-        errors.append(current_error)
 
-    return selected_indices
+    return selected_indices.cpu().numpy()
 
 
 def column_subset_selection(A, k, max_iterations=100, threshold=1e-6):
     # Initial column selection based on leverage scores
     initial_indices = initial_column_selection(A, k, method='leverage')
-
-    # Local search
-    selected_indices = local_search(A, initial_indices, max_iterations, threshold)
-
-    return selected_indices
+    return local_search(A, initial_indices, max_iterations, threshold)
 
 def slice_attention_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     weights = [W.weight.data for W in layer_adapter.get_attention_inputs()]
