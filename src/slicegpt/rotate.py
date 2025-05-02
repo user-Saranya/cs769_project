@@ -43,8 +43,9 @@ def compute_fast_leverage_scores(A: np.ndarray, num_samples=1000) -> np.ndarray:
 
 def initial_column_selection(A: np.ndarray, k: int, method='leverage') -> np.ndarray:
     if method == 'leverage':
+        total_elements = A.numel() if isinstance(A, torch.Tensor) else A.size
         leverage_scores = (
-            compute_fast_leverage_scores(A) if A.size > 1e7 else compute_leverage_scores(A)
+            compute_fast_leverage_scores(A) if total_elements > 1e7 else compute_leverage_scores(A)
         )
         return np.argpartition(-leverage_scores, k)[:k]
     else:
