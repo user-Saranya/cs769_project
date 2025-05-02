@@ -94,13 +94,13 @@ def slice_attention_input(layer_adapter: LayerAdapter, new_embedding_dimension: 
     transposed = concat_weights.T
     selected_indices = column_subset_selection(transposed, new_embedding_dimension)
     for W in layer_adapter.get_attention_inputs():
-      W.weight.data = W.weight.data[:, selected_indices]
+      W.weight.data = W.weight.data[selected_indices, :]
       W.in_features = new_embedding_dimension
     return selected_indices
 
 def slice_attention_output(layer_adapter: LayerAdapter, new_embedding_dimension: int, selected_indices) -> None:
     W = layer_adapter.get_attention_output()
-    W.weight.data = W.weight.data[selected_indices, :]
+    W.weight.data = W.weight.data[:, selected_indices]
     if W.bias is not None:
         W.bias.data = W.bias.data[selected_indices]
     W.out_features = new_embedding_dimension
@@ -111,13 +111,13 @@ def slice_mlp_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -
     transposed = concat_weights.T
     selected_indices = column_subset_selection(transposed, new_embedding_dimension)
     for W in layer_adapter.get_mlp_inputs():
-      W.weight.data = W.weight.data[:, selected_indices]
+      W.weight.data = W.weight.data[selected_indices, :]
       W.in_features = new_embedding_dimension
     return selected_indices
 
 def slice_mlp_output(layer_adapter: LayerAdapter, new_embedding_dimension: int, selected_indices) -> None:
     W = layer_adapter.get_mlp_output()
-    W.weight.data = W.weight.data[selected_indices, :]
+    W.weight.data = W.weight.data[:, selected_indices]
     if W.bias is not None:
         W.bias.data = W.bias.data[selected_indices]
     W.out_features = new_embedding_dimension
@@ -130,8 +130,8 @@ def slice_embeddings(model_adapter: ModelAdapter, new_embedding_dimensions: dict
 
 def slice_head(model_adapter: ModelAdapter, new_embedding_dimension: int) -> None:
     lm_head = model_adapter.get_lm_head()
-    selected_indices = column_subset_selection(lm_head, new_embedding_dimension)
-    lm_head.weight.data = lm_head.weight.data[:, selected_indices]
+    selected_indices = column_subset_selection(lm_head.T, new_embedding_dimension)
+    lm_head.weight.data = lm_head.weight.data[selected_indices, :]
     lm_head.in_features = new_embedding_dimension
 
 def rotate_and_slice(
