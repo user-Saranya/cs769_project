@@ -209,7 +209,7 @@ def rotate_and_slice_sequential(
               args[i],
           )
 
-        slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(idx), indices1)
+        slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(idx, match_head_dim=False), indices1)
 
         # Run GC and cleanup GPU memory
         cleanup_memory()
@@ -273,7 +273,7 @@ def rotate_and_slice_parallel(
               args[i],
           )
 
-        slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx), indices2)
+        slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx, match_head_dim=False), indices2)
         slice_attention_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx), indices1)
 
         layer.to('cpu')
@@ -317,10 +317,10 @@ def slice_rotated_model(model_adapter: ModelAdapter, slicing_scheduler: SlicingS
             indices2 = slice_mlp_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(i))   
 
             slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(i), indices2)
-            slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(i), indices1)
+            slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(i, match_head_dim=False), indices1)
         else:
             indices1 = slice_attention_input(layer_adapter, slicing_scheduler.get_attention_input_dimension(i))
-            slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(i), indices1)
+            slice_attention_output(layer_adapter, slicing_scheduler.get_attention_output_dimension(i, match_head_dim=False), indices1)
 
             indices2 = slice_mlp_input(layer_adapter, slicing_scheduler.get_mlp_input_dimension(i))
             slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(i), indices2)
