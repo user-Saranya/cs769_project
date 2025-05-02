@@ -102,7 +102,7 @@ def local_search(
 
     return list(selected_set)
 
-def column_subset_selection(A: np.ndarray, k: int, max_iterations=30, threshold=1e-4) -> list[int]:
+def column_subset_selection(A: np.ndarray, k: int, max_iterations=10, threshold=1e-4) -> list[int]:
     initial_indices = initial_column_selection(A, k, method='leverage')
     return local_search(A, initial_indices, max_iterations=max_iterations, threshold=threshold)
 
