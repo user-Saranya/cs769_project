@@ -75,7 +75,9 @@ class CompressedOPTDecoderLayer(OPTDecoderLayer):
 
         # Fully Connected
         hidden_states_shape = list(hidden_states.shape)
+        print(hidden_states.shape)
         hidden_states = hidden_states.reshape(-1, hidden_states.size(-1))
+        print("after: ", hidden_states.shape)
         residual = hidden_states
 
         # 125m, 1.7B, ..., 175B applies layer norm BEFORE attention
@@ -89,6 +91,7 @@ class CompressedOPTDecoderLayer(OPTDecoderLayer):
         hidden_states = dropout(hidden_states, p=self.dropout, training=self.training)
 
         hidden_states_shape[-1] = self.fc2.out_features  # to make sure the shape is correct
+        
 
         # if self.mlp_shortcut_Q is not None:
         #     rotated_shortcut = matmul(residual, self.mlp_shortcut_Q)
