@@ -107,14 +107,16 @@ def slice_attention_input(layer_adapter: LayerAdapter, new_embedding_dimension: 
 def slice_attention_output(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
     W = layer_adapter.get_attention_output()
     selected_indices = column_subset_selection(W.weight.data.T.cpu().numpy(), new_embedding_dimension)
+    print("Weight shape after:", W.weight.shape)
     W.weight.data = W.weight.data[selected_indices, :]
-    print("Weight shape:", W.weight.shape)
+    print("Weight shape after:", W.weight.shape)
     if W.bias is not None:
-        print("Bias shape:", W.bias.shape)
+        print("Bias shape before:", W.bias.shape)
     else:
         print("No bias present.")
     if W.bias is not None:
         W.bias.data = W.bias.data[selected_indices]
+        print("Bias shape after:", W.bias.shape)
     W.out_features = new_embedding_dimension
 
 def slice_mlp_input(layer_adapter: LayerAdapter, new_embedding_dimension: int) -> None:
@@ -143,6 +145,7 @@ def slice_mlp_output(layer_adapter: LayerAdapter, new_embedding_dimension: int) 
         print("No bias present.")
     if W.bias is not None:
         W.bias.data = W.bias.data[selected_indices]
+        print("Bias shape after:", W.bias.shape)
     W.out_features = new_embedding_dimension
 
 def slice_embeddings(model_adapter: ModelAdapter, new_embedding_dimensions: dict[int, int]) -> None:
