@@ -90,11 +90,11 @@ class CompressedOPTDecoderLayer(OPTDecoderLayer):
 
         hidden_states_shape[-1] = self.fc2.out_features  # to make sure the shape is correct
 
-        if self.mlp_shortcut_Q is not None:
-            rotated_shortcut = matmul(residual, self.mlp_shortcut_Q)
-            hidden_states = rotated_shortcut.view(hidden_states_shape) + hidden_states.view(hidden_states_shape)
-        else:
-            hidden_states = (residual + hidden_states).view(hidden_states_shape)
+        # if self.mlp_shortcut_Q is not None:
+        #     rotated_shortcut = matmul(residual, self.mlp_shortcut_Q)
+        #     hidden_states = rotated_shortcut.view(hidden_states_shape) + hidden_states.view(hidden_states_shape)
+        # else:
+        #     hidden_states = (residual + hidden_states).view(hidden_states_shape)
 
         # 350m applies layer norm AFTER attention
         if not self.do_layer_norm_before:
