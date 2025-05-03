@@ -141,14 +141,14 @@ def load_sliced_model(
     fuse_modules(model_adapter)
 
     hidden_size = model_adapter.hidden_size
-    for layer_adapter in model_adapter.get_layers():
-        if not model_adapter.parallel_blocks:
-            layer_adapter.layer.mlp_shortcut_Q = torch.nn.Parameter(
-                torch.zeros(hidden_size, hidden_size).to(dtype=torch.float16)
-            )
-        layer_adapter.layer.attn_shortcut_Q = torch.nn.Parameter(
-            torch.zeros(hidden_size, hidden_size).to(dtype=torch.float16)
-        )
+    # for layer_adapter in model_adapter.get_layers():
+    #     if not model_adapter.parallel_blocks:
+    #         layer_adapter.layer.mlp_shortcut_Q = torch.nn.Parameter(
+    #             torch.zeros(hidden_size, hidden_size).to(dtype=torch.float16)
+    #         )
+    #     layer_adapter.layer.attn_shortcut_Q = torch.nn.Parameter(
+    #         torch.zeros(hidden_size, hidden_size).to(dtype=torch.float16)
+    #     )
 
     config_path = pathlib.Path(sliced_model_path) / my_sliced_model_config
 
